@@ -59,22 +59,30 @@ def getBestCaverns(moves, data):
     return [ moveSize[0] for moveSize in cavernSizes if moveSize[1] == largestCavern ]
 
 
-def getSizeOfCavern(cavernStart, data):
+def getSizeOfCavern(entrance, data):
     # Iterate through and count nonLethal adjacent squares, up to your body length.
     curSize = 0
-    expendedMoves = []
-    toCount = [cavernStart]
-    while toCount:
+    visitedSquares = []
+    toVisit = [entrance]
+    while toVisit:
+# Nick wuz here
         # Mark square as counted for this cavernStart
-        curSquare = toCount[0]
-        expendedMoves += curSquare
-        toCount.remove(curSquare)
+        curSquare = toVisit[0]
+        toVisit = toVisit[1:]
+        visitedSquares.append(curSquare)
         curSize += 1
         # If up to body size, stop counting
         if curSize >= len(data['you']['body']):
             return curSize
-        # Append unvisited squares to counting queue
-        toCount += [ move for move in nonLethalSquares(curSquare, data) if move not in expendedMoves ]
+        # Get adjacent, nonLethal squares
+        adjNonLethal = nonLethalSquares(curSquare, data)
+        # Add into toVisit, the ones that are in neither visitedSquares OR toVisit
+        toVisit += [
+            square
+            for square in adjNonLethal
+            if square not in visitedSquares
+            and square not in toVisit
+        ]
     return curSize
 
 
@@ -92,6 +100,15 @@ def getDirection(head, move):
     elif move['y'] < head['y']:
         assert move['x'] == head['x'], 'Cannot move diagonally'
         return 'up'
+
+
+def pickFood(squares, food):
+    # Return a food square, or else False
+    for square in squares:
+        if square in food:
+            return square
+            break
+    return False
 
 
 @bottle.route("/")
@@ -143,9 +160,16 @@ def move():
     # Judge options with crappy flood-filly thing
     bestCaverns = getBestCaverns(nonLethal, data)
     # Pick random from remaining
-    move = random.choice(bestCaverns)
+    if bestCaverns:
+        foodSquare = pickFood(bestCaverns)
+        if foodSquare:
+            decidedMove = foodSquare
+        else:
+            decidedMove = random.choice(bestCaverns)
+        moveDirection = getDirection(head, decidedMove)
+    else:
+        moveDirection = random.choice(['right','left','down','up'])
     # Generate response payload
-    moveDirection = getDirection(head, move)
     response = {"move": moveDirection, "shout": "I am a python snake!"}
     return HTTPResponse(
         status=200,
@@ -171,6 +195,7 @@ def main():
         port=os.getenv("PORT", "8080"),
         debug=os.getenv("DEBUG", True),
     )
+
 
 
 # Expose WSGI app (so gunicorn can find it)
