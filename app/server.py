@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import time
 
 import bottle
 from bottle import HTTPResponse
@@ -16,16 +17,18 @@ def getAdjacentMoves(head):
     ]
 
 
-def removeOutBounds(moves, height, width):
-    # Given list of squares, return inbound squares (0 < x && y width && height).
-    return [
-        move
-        for move in moves
-        if move['x'] >= 0
-        and move['y'] >= 0
-        and move['x'] < width
-        and move['y'] < height
-    ]
+def isInBounds(move, height, width):
+    # Given a square, return True if inbounds otherwise False
+        if move['x'] < 0:
+            return False
+        elif move['y'] < 0:
+            return False
+        elif move['x'] >= width:
+            return False
+        elif move['y'] >= height:
+            return False
+        else:
+            return True
 
 
 def removeSnakePositions(moves, snakePositions):
@@ -41,7 +44,7 @@ def nonLethalSquares(head, data):
     # Given a starting square, return any squares that are
     #   adjacent, inbounds, and not guaranteed to be occupied.
     adjacent = getAdjacentMoves(head)
-    inBounds = removeOutBounds(adjacent, data['board']['height'], data['board']['width'])
+    inBounds = [ square for square in adjacent if isInBounds(square, data['board']['height'], data['board']['width']) ]
     nonLethal = removeSnakePositions(inBounds, data['board']['snakePositions'])
     return nonLethal
 
@@ -49,6 +52,8 @@ def nonLethalSquares(head, data):
 def getBestCaverns(moves, data):
     # Compare "sizes" corresponding to each move, return those tied for highest.
     #   Relies upon 'moves' being a list of non-lethal squares.
+    if len(moves) == 0:
+        return ([], 0)
     cavernSizes = []
     largestCavern = 0
     for move in moves:
@@ -56,7 +61,7 @@ def getBestCaverns(moves, data):
         cavernSizes.append([move, size])
         if size > largestCavern:
             largestCavern = size
-    return [ moveSize[0] for moveSize in cavernSizes if moveSize[1] == largestCavern ]
+    return ([ moveSize[0] for moveSize in cavernSizes if moveSize[1] == largestCavern ], largestCavern)
 
 
 def getSizeOfCavern(entrance, data):
@@ -72,7 +77,7 @@ def getSizeOfCavern(entrance, data):
         visitedSquares.append(curSquare)
         curSize += 1
         # If up to body size, stop counting
-        if curSize >= len(data['you']['body']):
+        if curSize >= len(data['you']['body'])*2:
             return curSize
         # Get adjacent, nonLethal squares
         adjNonLethal = nonLethalSquares(curSquare, data)
@@ -102,13 +107,49 @@ def getDirection(head, move):
         return 'up'
 
 
-def pickFood(squares, food):
-    # Return a food square, or else False
+def foodPriority(squares, food):
+    # Return only food squares, or else return all moves (if no food)
+    foodSquares = [ square for square in squares if square in food ]
+    if foodSquares:
+        return foodSquares
+    else:
+        return squares
+
+
+def foldPriority(squares, head, board, yourLength):
+    # Return squares that help maximize space used
+    # Basically prioritises covering up new body segments rather than old ones
+    squarePriorities = []  # Store priority score of each square
     for square in squares:
-        if square in food:
-            return square
-            break
-    return False
+        priority = 0
+        adjacents = getAdjacentMoves(square)
+        for adjacentSquare in adjacents:
+            if adjacentSquare != head:
+                # If adjacent square is wall or snake then add one to priority score
+                if not isInBounds(adjacentSquare, board['height'], board['width']):
+                    priority += yourLength
+                elif adjacentSquare in board['snakePositions']:
+                    priority += board['bodyStaleness'][adjacentSquare['x']][adjacentSquare['y']]
+        squarePriorities.append(priority)
+    highestPriority = max(squarePriorities)
+    options = []
+    for i, square in enumerate(squares):
+        if squarePriorities[i] == highestPriority:
+            options.append(square)
+    return options
+
+
+def avoidHeads(squares, board, yourId):
+    # Returns squares that are out of reach of opponents, or else return all squares
+    enemyAdjacent = []
+    for snake in board['snakes']:
+        if snake['id'] != yourId:
+            enemyAdjacent += getAdjacentMoves(snake['body'][0])
+    safeSquares = [ square for square in squares if square not in enemyAdjacent ]
+    if safeSquares:
+        return safeSquares
+    else:
+        return squares
 
 
 @bottle.route("/")
@@ -152,23 +193,36 @@ def move():
     data = bottle.request.json
     head = data['you']['body'][0]
     data['board']['snakePositions'] = []
+    data['board']['bodyStaleness'] = []
+    for column in range(data['board']['width']):
+        column = []
+        for row in range(data['board']['height']):
+            column.append(0)
+        data['board']['bodyStaleness'].append(column)
     for snake in data['board']['snakes']:
-        data['board']['snakePositions'] += snake['body']
+        # Tail piece will move next turn, don't avoid it
+        for i, square in enumerate(snake['body'][:-1]):
+            data['board']['snakePositions'].append(square)
+            # Track the number of turns until this body square is the tail
+            data['board']['bodyStaleness'][square['x']][square['y']] = len(snake['body'])-i-1
 
     # Get moves that won't kill you
-    nonLethal = nonLethalSquares(head, data)
-    # Judge options with crappy flood-filly thing
-    bestCaverns = getBestCaverns(nonLethal, data)
-    # Pick random from remaining
-    if bestCaverns:
-        foodSquare = pickFood(bestCaverns)
-        if foodSquare:
-            decidedMove = foodSquare
-        else:
-            decidedMove = random.choice(bestCaverns)
-        moveDirection = getDirection(head, decidedMove)
+    options = nonLethalSquares(head, data)
+    # Avoid other snakes next moves, if possible
+    options = avoidHeads(options, data['board'], data['you']['id'])
+    # Judge options with flood-filly thing to avoid tight spaces
+    options, cavernSize = getBestCaverns(options, data)
+    # If under 3/4 health prioritise food
+    if data['you']['health'] < 75:
+        options = foodPriority(options, data['board']['food'])
+    # If biggest cavern is less than 3/2 body size prioritise folding
+    if cavernSize <= len(data['you']['body'])*1.5:
+        options = foldPriority(options, head, data['board'], len(data['you']['body']))
+    if options:
+        moveDirection = getDirection(head, random.choice(options))
     else:
         moveDirection = random.choice(['right','left','down','up'])
+
     # Generate response payload
     response = {"move": moveDirection, "shout": "I am a python snake!"}
     return HTTPResponse(
