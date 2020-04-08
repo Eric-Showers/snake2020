@@ -225,6 +225,7 @@ def move():
     #TODO
     # Navigate to opponent heads from choices
     # Suggest picking one furthest from heads
+    # Hint use this - pip install pathfinding
 
     # Generate response payload
     response = {"move": moveDirection, "shout": "There can only be one"}
