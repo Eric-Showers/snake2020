@@ -174,7 +174,7 @@ def start():
     data = bottle.request.json
     print("START:", json.dumps(data))
 
-    response = {"color": "#00FF00", "headType": "regular", "tailType": "regular"}
+    response = {"color": "#187eb5", "headType": "regular", "tailType": "regular"}
     return HTTPResponse(
         status=200,
         headers={"Content-Type": "application/json"},
@@ -222,9 +222,12 @@ def move():
         moveDirection = getDirection(head, random.choice(options))
     else:
         moveDirection = random.choice(['right','left','down','up'])
+    #TODO
+    # Navigate to opponent heads from choices
+    # Suggest picking one furthest from heads
 
     # Generate response payload
-    response = {"move": moveDirection, "shout": "I am a python snake!"}
+    response = {"move": moveDirection, "shout": "There can only be one"}
     return HTTPResponse(
         status=200,
         headers={"Content-Type": "application/json"},
